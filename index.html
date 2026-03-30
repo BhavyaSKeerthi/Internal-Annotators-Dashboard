@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Enterprise Personnel Analytics</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { background-color: #020617; color: #f1f5f9; font-family: 'Plus Jakarta Sans', sans-serif; overflow-x: hidden; }
+        .tab-active { color: #22d3ee; border-bottom: 2px solid #22d3ee; }
+        .glass-card { background: rgba(30, 41, 59, 0.4); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; transition: all 0.3s ease; }
+        .glass-card:hover { transform: translateY(-4px); border-color: rgba(34, 211, 238, 0.4); }
+        .hidden { display: none; }
+        @keyframes zoomIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+        .animate-zoom { animation: zoomIn 0.4s ease-out forwards; }
+    </style>
+</head>
+<body class="p-4 md:p-10">
+    <div class="max-w-7xl mx-auto">
+        <header class="mb-8 flex justify-between items-center border-b border-slate-800 pb-6">
+            <h1 class="text-3xl font-extrabold text-white tracking-tighter">DATA <span class="text-cyan-400 italic">INTELLIGENCE</span></h1>
+            <div id="status" class="text-[10px] font-bold px-3 py-1 bg-slate-900 border border-slate-800 rounded-full text-yellow-500 uppercase tracking-widest">Awaiting data.csv...</div>
+        </header>
+
+        <nav class="flex gap-8 mb-10 overflow-x-auto whitespace-nowrap scrollbar-hide">
+            <button onclick="showTab(event, 'tab-deploy')" class="tab-btn pb-2 font-bold text-xs uppercase tracking-widest transition tab-active">Deployment</button>
+            <button onclick="showTab(event, 'tab-train')" class="tab-btn pb-2 font-bold text-xs uppercase tracking-widest transition text-slate-500">Training Stats</button>
+            <button onclick="showTab(event, 'tab-batch')" class="tab-btn pb-2 font-bold text-xs uppercase tracking-widest transition text-slate-500">Batch Analytics</button>
+            <button onclick="showTab(event, 'tab-perform')" class="tab-btn pb-2 font-bold text-xs uppercase tracking-widest transition text-slate-500">Assessment Scores</button>
+        </nav>
+
+        <div id="view-container">
+            <section id="tab-deploy" class="tab-content animate-zoom">
+                <div id="deploy-grid" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4"></div>
+            </section>
+            
+            <section id="tab-train" class="tab-content hidden animate-zoom">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <div class="glass-card p-8"><h3 class="font-bold mb-6 text-cyan-400 text-sm uppercase">Module Penetration</h3><canvas id="chart-train"></canvas></div>
+                    <div class="glass-card p-8 flex flex-col justify-center"><div id="train-list" class="space-y-4"></div></div>
+                </div>
+            </section>
+
+            <section id="tab-batch" class="tab-content hidden animate-zoom">
+                <div class="glass-card p-8 flex flex-col md:flex-row items-center gap-10">
+                    <div class="w-44 h-44"><canvas id="chart-batch"></canvas></div>
+                    <div id="batch-metrics" class="flex-1 grid grid-cols-2 sm:grid-cols-3 gap-3 w-full"></div>
+                </div>
+            </section>
+
+            <section id="tab-perform" class="tab-content hidden animate-zoom">
+                <div class="glass-card p-8">
+                    <h3 class="text-sm font-bold text-slate-400 uppercase mb-8">Score Breakdown Categorized by Deployed Project</h3>
+                    <div class="h-[400px]"><canvas id="chart-perform"></canvas></div>
+                </div>
+            </section>
+        </div>
+
+        <div id="manual-load" class="hidden fixed bottom-6 right-6 z-50">
+            <input type="file" id="picker" class="hidden" accept=".csv">
+            <label for="picker" class="bg-cyan-500 text-slate-950 px-6 py-3 rounded-full font-bold cursor-pointer shadow-xl hover:bg-cyan-400 transition">Upload CSV</label>
+        </div>
+    </div>
+
+    <script>
+        function showTab(e, id) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.replace('tab-active', 'text-slate-500'));
+            document.getElementById(id).classList.remove('hidden');
+            e.currentTarget.classList.replace('text-slate-500', 'tab-active');
+        }
+
+        function init() {
+            Papa.parse('data.csv', {
+                download: true, header: false,
+                complete: (res) => process(res.data),
+                error: () => {
+                    document.getElementById('status').innerText = "🔴 NO data.csv FOUND";
+                    document.getElementById('manual-load').classList.remove('hidden');
+                }
+            });
+        }
+
+        document.getElementById('picker').addEventListener('change', (e) => {
+            Papa.parse(e.target.files[0], { header: false, complete: (res) => {
+                document.getElementById('manual-load').classList.add('hidden');
+                process(res.data);
+            }});
+        });
+
+        function process(rows) {
+            const hIdx = rows.findIndex(r => r.includes('Name'));
+            const headers = rows[hIdx];
+            let trainees = [];
+            let curBatch = "";
+
+            rows.slice(hIdx + 1).forEach(row => {
+                if (!row[1] || row[1].trim() === "") return; // Index 1 is Column B (Name)
+                if (row[0] && row[0].trim() !== "") curBatch = row[0]; // Index 0 is Column A (Batch)
+
+                // 1. DEPLOYMENT (Column C -> Index 2)
+                let project = (row[2] || "").trim();
+
+                // 2. TRAINING (Columns D to K -> Index 3 to 10)
+                let training = {};
+                for(let i=3; i<=10; i++) {
+                    if(headers[i]) training[headers[i]] = (row[i] || "").toLowerCase();
+                }
+
+                // 3. ASSESSMENTS (Columns L to S -> Index 11 to 18)
+                let assessments = {};
+                for(let i=11; i<=18; i++) {
+                    if(headers[i]) assessments[headers[i]] = (row[i] || "").toLowerCase();
+                }
+
+                trainees.push({ name: row[1], batch: curBatch, project, training, assessments });
+            });
+
+            document.getElementById('status').innerText = "🟢 SYSTEM LIVE";
+            document.getElementById('status').classList.replace('text-yellow-500', 'text-green-500');
+            render(trainees);
+        }
+
+        function render(data) {
+            // DEPLOYMENT CARDS (No Unassigned)
+            const dCounts = {};
+            data.forEach(d => { if(d.project && d.project.length > 1) dCounts[d.project] = (dCounts[d.project] || 0) + 1; });
+            const dGrid = document.getElementById('deploy-grid');
+            dGrid.innerHTML = "";
+            Object.entries(dCounts).sort((a,b)=>b[1]-a[1]).forEach(([n,c]) => {
+                dGrid.innerHTML += `<div class="glass-card p-5 text-center border-b-2 border-cyan-500">
+                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">${n}</p>
+                    <h2 class="text-3xl font-black text-white">${c}</h2>
+                </div>`;
+            });
+
+            // TRAINING STATS
+            const tLabels = Object.keys(data[0].training);
+            const tValues = tLabels.map(l => data.filter(d => d.training[l].includes('train')).length);
+            new Chart(document.getElementById('chart-train'), {
+                type: 'bar', data: { labels: tLabels, datasets: [{ data: tValues, backgroundColor: '#22d3ee', borderRadius: 6 }] },
+                options: { plugins: { legend: { display: false } }, scales: { y: { grid: { color: '#1e293b' } } } }
+            });
+            const tList = document.getElementById('train-list'); tList.innerHTML = "";
+            tLabels.forEach((l, i) => {
+                let pct = Math.round((tValues[i]/data.length)*100);
+                tList.innerHTML += `<div class="flex justify-between text-xs font-bold uppercase tracking-tighter"><span>${l}</span><span>${pct}%</span></div>
+                <div class="w-full bg-slate-800 h-1.5 rounded-full mb-4 overflow-hidden"><div class="bg-cyan-500 h-full" style="width:${pct}%"></div></div>`;
+            });
+
+            // BATCH ANALYTICS (Compact)
+            const bCounts = {};
+            data.forEach(d => bCounts[d.batch] = (bCounts[d.batch] || 0) + 1);
+            new Chart(document.getElementById('chart-batch'), {
+                type: 'doughnut', data: { labels: Object.keys(bCounts), datasets: [{ data: Object.values(bCounts), backgroundColor: ['#8b5cf6','#ec4899','#3b82f6','#10b981','#f59e0b'], borderWidth: 0 }] },
+                options: { cutout: '85%', plugins: { legend: { display: false } }, animation: { animateRotate: true } }
+            });
+            const bMet = document.getElementById('batch-metrics'); bMet.innerHTML = "";
+            Object.entries(bCounts).forEach(([n,c]) => {
+                bMet.innerHTML += `<div class="bg-slate-800/50 p-3 rounded-xl border border-slate-700/50 text-center"><p class="text-[9px] text-slate-500 uppercase font-bold">${n}</p><p class="text-lg font-black">${c}</p></div>`;
+            });
+
+            // ASSESSMENT SCORES (By Deployed Project)
+            const pScores = {};
+            data.forEach(d => {
+                if(!d.project || d.project.length < 2) return;
+                if(!pScores[d.project]) pScores[d.project] = { good: 0, average: 0, bad: 0 };
+                Object.values(d.assessments).forEach(v => {
+                    if(v.includes('good')) pScores[d.project].good++;
+                    else if(v.includes('average')) pScores[d.project].average++;
+                    else if(v.includes('bad')) pScores[d.project].bad++;
+                });
+            });
+            const pLabels = Object.keys(pScores);
+            new Chart(document.getElementById('chart-perform'), {
+                type: 'bar',
+                data: {
+                    labels: pLabels,
+                    datasets: [
+                        { label: 'Good', data: pLabels.map(l => pScores[l].good), backgroundColor: '#10b981' },
+                        { label: 'Average', data: pLabels.map(l => pScores[l].average), backgroundColor: '#f59e0b' },
+                        { label: 'Bad', data: pLabels.map(l => pScores[l].bad), backgroundColor: '#ef4444' }
+                    ]
+                },
+                options: { responsive: true, maintainAspectRatio: false, scales: { x: { stacked: true }, y: { stacked: true, grid: { color: '#1e293b' } } } }
+            });
+        }
+        init();
+    </script>
+</body>
+</html>
